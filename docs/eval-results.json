@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-26T14:31:02.002Z",
+  "generatedAt": "2026-08-26T14:35:35.636Z",
   "total": 55,
   "passed": 55,
   "suites": [
@@ -224,7 +224,7 @@
           "suite": "idempotency",
           "name": "five concurrent commits produce exactly one execution",
           "passed": true,
-          "detail": "1 reported executed; others: already_executed, already_executed, already_executed, needs_attention"
+          "detail": "1 reported executed; others: already_executed, already_executed, already_executed, already_executed"
         },
         {
           "suite": "idempotency",
@@ -334,7 +334,7 @@
           "suite": "fault_recovery",
           "name": "no execution is left dangling in pending",
           "passed": true,
-          "detail": "states: {\"failed\":12,\"succeeded\":48}"
+          "detail": "states: {\"succeeded\":43,\"failed\":17}"
         },
         {
           "suite": "fault_recovery",
@@ -352,7 +352,7 @@
           "suite": "fault_recovery",
           "name": "refund count equals succeeded execution count",
           "passed": true,
-          "detail": "refunds=48 succeeded=48"
+          "detail": "refunds=43 succeeded=43"
         },
         {
           "suite": "fault_recovery",
@@ -364,7 +364,7 @@
           "suite": "fault_recovery",
           "name": "unknown outcomes were resolved by probing, not by retrying",
           "passed": true,
-          "detail": "6 timeouts (1 of which had already applied), 6 lookups"
+          "detail": "4 timeouts (2 of which had already applied), 4 lookups"
         }
       ]
     }

@@ -45,3 +45,12 @@ jobs:
       - run: npm ci
       - run: npm run db:migrate
       - run: npm run db:test:rls
+      - name: generate ephemeral capability keys
+        run: node scripts/generate-keys.mjs >> "$GITHUB_ENV"
+      - run: npm run demo
+      - run: npm run evals
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: docs/eval-results.json

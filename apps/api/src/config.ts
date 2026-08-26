@@ -1,4 +1,27 @@
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { z } from 'zod';
+
+/**
+ * Load .env if one exists, without adding a dependency.
+ *
+ * Node 20.12+ ships `process.loadEnvFile`. Real environment variables already set are
+ * left alone, so a deployment that injects config the normal way is unaffected by a
+ * stray .env on disk.
+ */
+function loadDotEnv(): void {
+  const path = resolve(process.cwd(), '.env');
+  if (!existsSync(path)) return;
+  const load = (process as NodeJS.Process & { loadEnvFile?: (p: string) => void }).loadEnvFile;
+  if (typeof load === 'function') {
+    try {
+      load.call(process, path);
+    } catch {
+      // A malformed .env should not take the process down before config validation has
+      // had a chance to produce a readable error.
+    }
+  }
+}
 
 /**
  * Configuration is validated once at boot and never read from process.env again.
@@ -39,11 +62,20 @@ export type Config = z.infer<typeof schema> & {
   capabilityPublicKey: string;
 };
 
-/** PEM blocks arrive from .env with literal backslash-n sequences. */
-const unescapePem = (value: string): string => value.replace(/\\n/g, '\n');
+/**
+ * PEM blocks arrive with literal backslash-n sequences, and depending on how they were
+ * written they may still be wrapped in the quotes from the .env line. GitHub Actions'
+ * $GITHUB_ENV in particular does not strip them.
+ */
+const unescapePem = (value: string): string =>
+  value
+    .trim()
+    .replace(/^["']|["']$/g, '')
+    .replace(/\\n/g, '\n');
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = schema.safeParse(env);
+export function loadConfig(env?: NodeJS.ProcessEnv): Config {
+  if (!env) loadDotEnv();
+  const parsed = schema.safeParse(env ?? process.env);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`)

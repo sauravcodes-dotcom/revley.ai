@@ -16,8 +16,15 @@ import type {
  * deliver a webhook twice in the wrong order. A system whose reliability claims rest on
  * "we handled the happy path against a sandbox" has not been tested; it has been demoed.
  *
- * Every decision is a pure function of (seed, idempotency key, attempt), so a run that
- * fails in CI reproduces exactly on a laptop. There is no Math.random anywhere.
+ * Every decision is a pure function of (seed, idempotency key, purpose) via SHA-256, so
+ * replaying a specific idempotency key always produces the same behaviour and a single
+ * failing case can be reproduced exactly. There is no Math.random here.
+ *
+ * The aggregate sample across an eval run does still vary, because plan ids are random
+ * UUIDs and the idempotency key is derived from them. That is why the eval assertions are
+ * invariants -- the ledger balances, no refund exists without a succeeded execution behind
+ * it, nothing is left pending -- rather than expected counts. An assertion that held only
+ * for one lucky sample would not be worth making.
  *
  * The simulator also models the one behaviour that separates a real processor from a
  * mock: it is genuinely idempotent. Submitting the same idempotency key twice returns
