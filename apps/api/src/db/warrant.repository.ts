@@ -7,7 +7,6 @@ import {
   type UsageCounters,
 } from '@warrant/core';
 import type { Sql } from './db';
-import { isPgError, PG_UNIQUE_VIOLATION } from './db';
 
 export const newId = (prefix: string): string =>
   `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 22)}`;
@@ -281,12 +280,28 @@ export async function claimExecution(
   processorAccountId: string | null,
 ): Promise<{ claimed: boolean; execution: StoredExecution }> {
   const id = newId('exe');
-  try {
-    await sql.query(
-      `INSERT INTO executions (id, tenant_id, plan_id, idempotency_key, state, processor_account_id)
-       VALUES ($1,$2,$3,$4,'pending',$5)`,
-      [id, tenantId, planId, idempotencyKey, processorAccountId],
-    );
+
+  // ON CONFLICT DO NOTHING rather than catching the unique violation.
+  //
+  // Catching it was the first implementation and it was wrong in a way that only showed
+  // up under concurrency: in PostgreSQL a constraint violation aborts the whole
+  // transaction, so the follow-up SELECT that reads the winner's row failed with
+  // "current transaction is aborted". The losing caller then threw instead of returning
+  // the winning execution -- meaning a duplicate submission produced an error rather than
+  // the idempotent answer it was supposed to produce.
+  //
+  // Letting the conflict be a no-op keeps the transaction alive, so the loser can read
+  // the winner's row and report it. A SAVEPOINT around the INSERT would also work; this
+  // is cheaper and says what it means.
+  const inserted = await sql.query<{ id: string }>(
+    `INSERT INTO executions (id, tenant_id, plan_id, idempotency_key, state, processor_account_id)
+     VALUES ($1,$2,$3,$4,'pending',$5)
+     ON CONFLICT (idempotency_key) DO NOTHING
+     RETURNING id`,
+    [id, tenantId, planId, idempotencyKey, processorAccountId],
+  );
+
+  if (inserted.rows.length > 0) {
     return {
       claimed: true,
       execution: {
@@ -300,11 +315,23 @@ export async function claimExecution(
         errorDetail: null,
       },
     };
-  } catch (err) {
-    if (!isPgError(err, PG_UNIQUE_VIOLATION)) throw err;
-    const existing = await loadExecutionByKey(sql, tenantId, idempotencyKey);
-    if (!existing) throw err;
-    return { claimed: false, execution: existing };
+  }
+
+  const existing = await loadExecutionByKey(sql, tenantId, idempotencyKey);
+  if (!existing) {
+    // The row exists but is invisible to this transaction: another transaction has
+    // inserted it and not yet committed. Reporting a conflict is correct -- this caller
+    // must not proceed to the processor.
+    throw new ConcurrentExecutionError(idempotencyKey);
+  }
+  return { claimed: false, execution: existing };
+}
+
+/** Raised when another transaction holds an uncommitted claim on the same plan. */
+export class ConcurrentExecutionError extends Error {
+  constructor(idempotencyKey: string) {
+    super(`another transaction holds an uncommitted claim on ${idempotencyKey.slice(0, 16)}`);
+    this.name = 'ConcurrentExecutionError';
   }
 }
 

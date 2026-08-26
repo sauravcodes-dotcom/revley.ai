@@ -13,6 +13,7 @@ import type { Db } from '../db/db';
 import { loadSnapshot } from '../db/snapshot.repository';
 import { focusForActionParams, toActionParams } from '../domain/action-params';
 import {
+  ConcurrentExecutionError,
   chargeUsage,
   claimExecution,
   enqueue,
@@ -146,11 +147,25 @@ export class ExecutionService {
       };
     }
 
-    const claim = await this.db.withTenant(tenantId, async (sql) => {
-      const c = await claimExecution(sql, tenantId, planId, idempotencyKey, accountId);
-      if (c.claimed) await setPlanState(sql, tenantId, planId, 'executing');
-      return c;
-    });
+    let claim;
+    try {
+      claim = await this.db.withTenant(tenantId, async (sql) => {
+        const c = await claimExecution(sql, tenantId, planId, idempotencyKey, accountId);
+        if (c.claimed) await setPlanState(sql, tenantId, planId, 'executing');
+        return c;
+      });
+    } catch (err) {
+      if (err instanceof ConcurrentExecutionError) {
+        // A sibling transaction is mid-claim. Backing off is the whole point: whichever
+        // caller committed the claim will make the single processor call.
+        return {
+          status: 'needs_attention',
+          executionId: '',
+          detail: 'a concurrent commit of this plan is in flight',
+        };
+      }
+      throw err;
+    }
 
     if (!claim.claimed) {
       // Someone else got there first. Report their result rather than making a second

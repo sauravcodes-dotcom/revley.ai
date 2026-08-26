@@ -102,6 +102,14 @@ export class SimulatedProcessor implements PaymentProcessor {
   private readonly operations = new Map<string, RecordedOperation>();
   private readonly emitted: EmittedWebhook[] = [];
   private sequence = 0;
+  /** Counters for the eval report. Without these, "we handle timeouts correctly" is a
+   *  claim with no evidence that a timeout ever happened. */
+  private readonly counters = {
+    calls: 0,
+    indeterminate: 0,
+    indeterminateButApplied: 0,
+    lookups: 0,
+  };
 
   constructor(
     readonly name: ProcessorName,
@@ -123,6 +131,8 @@ export class SimulatedProcessor implements PaymentProcessor {
   }
 
   private async perform(kind: string, op: ProcessorOperation): Promise<ProcessorOutcome> {
+    this.counters.calls += 1;
+
     // Real idempotency: the same key returns the same answer, forever.
     const existing = this.operations.get(op.idempotencyKey);
     if (existing) return existing.outcome;
@@ -158,6 +168,8 @@ export class SimulatedProcessor implements PaymentProcessor {
       // The dangerous one. We tell the caller we do not know; whether it actually
       // happened is decided here and discoverable only through lookup().
       const applied = roll('timeout-applied') < this.faults.timeoutButAppliedRate;
+      this.counters.indeterminate += 1;
+      if (applied) this.counters.indeterminateButApplied += 1;
       record = {
         outcome: {
           status: 'indeterminate',
@@ -181,6 +193,7 @@ export class SimulatedProcessor implements PaymentProcessor {
   }
 
   async lookup(idempotencyKey: string): Promise<LookupResult> {
+    this.counters.lookups += 1;
     const rec = this.operations.get(idempotencyKey);
     if (!rec) return { found: false };
     return {
@@ -216,6 +229,10 @@ export class SimulatedProcessor implements PaymentProcessor {
       // order" delivery is expressed to the harness.
       sequenceHint: outOfOrder ? -this.sequence : this.sequence,
     });
+  }
+
+  stats(): Readonly<typeof this.counters> {
+    return { ...this.counters };
   }
 
   /** Drain the webhooks this processor has emitted, in the order the harness should

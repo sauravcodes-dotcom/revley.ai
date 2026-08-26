@@ -20,7 +20,8 @@
     "keys:generate": "node scripts/generate-keys.mjs",
     "db:test:rls": "node db/rls.test.mjs",
     "demo": "npm run build --workspace @warrant/core --if-present && npm run build --workspace @warrant/api && node apps/api/dist/demo.js",
-    "seed": "node apps/api/dist/seed.js"
+    "seed": "node apps/api/dist/seed.js",
+    "evals": "npm run build --workspace @warrant/api && node apps/api/dist/evals/run.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
