@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+.next/
+coverage/
+*.tsbuildinfo
+
+# env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!**/testdata/**/*.key
+secrets/
+keys/
+
+# eval output (results are committed deliberately; raw traces are not)
+packages/evals/traces/
+*.log
+
+# os
+.DS_Store

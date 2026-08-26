@@ -1,0 +1,25 @@
+{
+  "name": "warrant",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Effect-first execution layer for payment agents",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:migrate": "node --experimental-strip-types db/migrate.ts",
+    "db:reset": "node --experimental-strip-types db/migrate.ts --reset"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
