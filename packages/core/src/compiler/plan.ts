@@ -77,6 +77,23 @@ export interface ResourceRef {
   id: string;
 }
 
+/**
+ * Which captured payment each part of a refund draws from, and how much.
+ *
+ * Derivable from `transitions` only by accident: a payment whose state does not change
+ * (a second partial refund against an already partially-refunded charge) emits no
+ * transition at all, and the executor would have no charge reference to call the
+ * processor with. So the split is stated explicitly, and it is part of the effect hash --
+ * refunding 60.00 from one charge is a different effect from splitting it across two,
+ * even though the merchant is out the same amount either way.
+ */
+export interface RefundAllocation {
+  paymentId: string;
+  processorAccountId: string;
+  processorReference: string;
+  amountMinor: number;
+}
+
 export type InvariantSeverity = 'blocking' | 'warning';
 
 export interface InvariantResult {
@@ -141,6 +158,8 @@ export interface EffectPlan {
   route: Route | null;
   totals: PlanTotals;
   resources: readonly ResourceRef[];
+  /** Populated for refund.issue; empty for every other action. */
+  allocations: readonly RefundAllocation[];
 
   invariants: readonly InvariantResult[];
   preconditions: readonly Precondition[];

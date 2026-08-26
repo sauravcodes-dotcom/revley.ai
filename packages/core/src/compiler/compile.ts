@@ -21,6 +21,7 @@ import type {
   LedgerDelta,
   PlanTotals,
   Precondition,
+  RefundAllocation,
   ResourceRef,
   RiskFlag,
   Route,
@@ -76,6 +77,7 @@ interface Draft {
   route: Route | null;
   totals: PlanTotals;
   resources: ResourceRef[];
+  allocations: RefundAllocation[];
   invariants: InvariantResult[];
   preconditions: Precondition[];
   riskFlags: RiskFlag[];
@@ -179,6 +181,9 @@ export function compile(
     resources: [...draft.resources]
       .map((r) => `${r.kind}:${r.id}`)
       .sort(),
+    allocations: [...draft.allocations]
+      .map((a) => `${a.paymentId}:${a.amountMinor}`)
+      .sort(),
     totals: {
       merchantOutflowMinor: draft.totals.merchantOutflow.minor,
       customerReceivesMinor: draft.totals.customerReceives.minor,
@@ -202,6 +207,7 @@ export function compile(
     route: draft.route,
     totals: draft.totals,
     resources: dedupeResources(draft.resources),
+    allocations: draft.allocations,
     invariants,
     preconditions: draft.preconditions,
     riskFlags: dedupe(draft.riskFlags),
@@ -407,6 +413,12 @@ function compileRefund(
       { kind: 'customer', id: order.customerId as string },
       ...allocations.map((a) => ({ kind: 'payment' as const, id: a.payment.id as string })),
     ],
+    allocations: allocations.map((a) => ({
+      paymentId: a.payment.id as string,
+      processorAccountId: a.payment.processorAccountId as string,
+      processorReference: a.payment.processorReference,
+      amountMinor: a.amount.minor,
+    })),
     totals: {
       merchantOutflow: amount,
       customerReceives: amount,
@@ -534,6 +546,7 @@ function compileCapture(
       reason: 'pinned_to_original_processor',
     },
     resources: paymentResources(payment, idx),
+    allocations: [],
     totals: {
       // A capture moves money toward the merchant. Budgets that bound outflow see zero
       // here; per-action caps still see the notional so an agent cannot capture an
@@ -617,6 +630,7 @@ function compileVoid(
       reason: 'pinned_to_original_processor',
     },
     resources: paymentResources(payment, idx),
+    allocations: [],
     totals: {
       merchantOutflow: zero(currency),
       customerReceives: zero(currency),
@@ -694,6 +708,7 @@ function compileSubscriptionCancel(
       { kind: 'subscription', id: sub_.id as string },
       { kind: 'customer', id: sub_.customerId as string },
     ],
+    allocations: [],
     totals: {
       merchantOutflow: zero(currency),
       customerReceives: zero(currency),
@@ -723,6 +738,7 @@ function emptyDraft(
     transitions: [],
     route: null,
     resources,
+    allocations: [],
     totals: {
       merchantOutflow: zero(currency),
       customerReceives: zero(currency),

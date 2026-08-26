@@ -21,3 +21,4 @@ packages/evals/traces/
 
 # os
 .DS_Store
+.env.demo

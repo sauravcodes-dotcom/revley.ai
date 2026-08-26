@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"],
+    "paths": { "@warrant/core": ["../../packages/core/src"] }
+  },
+  "include": ["src/**/*.ts"],
+  "references": [{ "path": "../../packages/core" }]
+}

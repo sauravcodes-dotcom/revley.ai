@@ -18,7 +18,9 @@
     "db:reset": "node db/migrate.mjs --reset",
     "db:up": "docker compose up -d --wait postgres",
     "keys:generate": "node scripts/generate-keys.mjs",
-    "db:test:rls": "node db/rls.test.mjs"
+    "db:test:rls": "node db/rls.test.mjs",
+    "demo": "npm run build --workspace @warrant/core --if-present && npm run build --workspace @warrant/api && node apps/api/dist/demo.js",
+    "seed": "node apps/api/dist/seed.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
