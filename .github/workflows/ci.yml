@@ -18,3 +18,30 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  database:
+    name: database (schema + tenant isolation)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: warrant
+          POSTGRES_PASSWORD: warrant
+          POSTGRES_DB: warrant
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U warrant -d warrant"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      DATABASE_ADMIN_URL: postgres://warrant:warrant@localhost:5433/warrant
+      DATABASE_URL: postgres://warrant_app:warrant_app@localhost:5433/warrant
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run db:migrate
+      - run: npm run db:test:rls
