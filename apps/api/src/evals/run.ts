@@ -478,6 +478,101 @@ async function idempotencySuite(db: Db, admin: Db, config: Config): Promise<void
     again.status === 'rejected',
     `status=${again.status}`,
   );
+
+  // Budget is reserved at commit, not merely checked at proposal.
+  //
+  // Isolating this needs care. The obvious version -- approve five plans on one order and
+  // commit them all -- passes for the wrong reason: the first commit changes the order, so
+  // the rest abort on divergence and the budget is never consulted. It looked like a
+  // budget test and was a TOCTOU test.
+  //
+  // So the two plans target different orders, which keeps re-verification clean, and the
+  // counter is moved between approval and commit to simulate spend from elsewhere. The
+  // only thing that can stop the second commit is the reservation.
+  await resetDemoState(admin);
+  const budgeted = await openDemoSession(db, config, {
+    sessionBudgetMinor: 10_000,
+    autoApproveBelowMinor: 100_000,
+  });
+
+  const approveOn = async (orderId: string, amountMinor: number): Promise<string | null> => {
+    const p = await gateway.propose(ctxFor(budgeted, false), {
+      name: 'propose_action',
+      input: {
+        action: 'refund.issue',
+        orderId,
+        amountMinor,
+        currency: 'USD',
+        reason: 'budget test',
+        rationale: 'test',
+      },
+    });
+    if (p.status !== 'authorized' && p.status !== 'awaiting_approval') return null;
+    await db.withTenant(DEMO.tenantId, async (sql) => {
+      await insertApproval(sql, DEMO.tenantId, {
+        id: newId('apr'),
+        planId: p.plan.planId,
+        approvedEffectHash: p.plan.effectHash,
+        decision: 'approved',
+        decidedBy: 'operator:eval',
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      });
+      await setPlanState(sql, DEMO.tenantId, p.plan.planId, 'approved');
+    });
+    return p.plan.planId;
+  };
+
+  // Both pass authorization against an untouched counter.
+  const planA = await approveOn(DEMO.orderId, 3_000);
+  const planB = await approveOn(DEMO.splitOrderId, 3_000);
+  record(
+    'idempotency',
+    'setup: two plans on distinct orders both authorize against an empty budget',
+    planA !== null && planB !== null,
+    `planA=${planA !== null} planB=${planB !== null}`,
+  );
+
+  const commit = (planId: string) =>
+    executor.execute({
+      tenantId: DEMO.tenantId,
+      planId,
+      sessionId: budgeted.sessionId,
+      traceId: newTraceId(),
+    });
+
+  const first = planA ? await commit(planA) : null;
+
+  // Spend from elsewhere in the session consumes most of what is left.
+  await db.withTenant(DEMO.tenantId, (sql) =>
+    sql.query(
+      `UPDATE capability_usage SET session_spent_minor = 9000
+        WHERE tenant_id = $1 AND session_id = $2 AND usage_date = CURRENT_DATE`,
+      [DEMO.tenantId, budgeted.sessionId],
+    ),
+  );
+
+  const second = planB ? await commit(planB) : null;
+
+  record(
+    'idempotency',
+    'the first commit succeeds',
+    first?.status === 'executed',
+    `status=${first?.status}`,
+  );
+  record(
+    'idempotency',
+    'the second commit is refused by the budget reservation, not by divergence',
+    second?.status === 'rejected' && second.reason.includes('budget'),
+    `status=${second?.status} reason=${second?.status === 'rejected' ? second.reason : 'n/a'}`,
+  );
+
+  const spent = await outflowMinor(db);
+  record(
+    'idempotency',
+    'spend stays within the session ceiling',
+    spent <= 10_000,
+    `${format(money(spent, 'USD'))} spent against a ${format(money(10_000, 'USD'))} ceiling`,
+  );
 }
 
 // ---------------------------------------------------------------------------

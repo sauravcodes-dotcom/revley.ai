@@ -14,14 +14,17 @@ import { loadSnapshot } from '../db/snapshot.repository';
 import { focusForActionParams, toActionParams } from '../domain/action-params';
 import {
   ConcurrentExecutionError,
-  chargeUsage,
   claimExecution,
   enqueue,
   finishExecution,
   idempotencyKeyFor,
   loadApproval,
   loadPlan,
+  lockUsage,
   newId,
+  releaseBudget,
+  reserveBudget,
+  sessionCeiling,
   setPlanState,
 } from '../db/warrant.repository';
 import type { CircuitBreaker, ProcessorRegistry } from '../processors/registry';
@@ -148,10 +151,53 @@ export class ExecutionService {
     }
 
     let claim;
+    let overBudget = false;
     try {
       claim = await this.db.withTenant(tenantId, async (sql) => {
         const c = await claimExecution(sql, tenantId, planId, idempotencyKey, accountId);
-        if (c.claimed) await setPlanState(sql, tenantId, planId, 'executing');
+        if (!c.claimed) return c;
+
+        // Reserve the spend before the processor is called, under the usage row lock, in
+        // the same transaction as the claim. Checking the budget at proposal time and
+        // charging it after success -- which is what this did originally -- leaves a
+        // window where several approved plans each pass against the same unchanged
+        // counter and then all commit.
+        const outflow = plan.totals.merchantOutflow.minor;
+        if (outflow > 0) {
+          const ceiling = await sessionCeiling(sql, tenantId, opts.sessionId);
+          if (ceiling !== null) {
+            const subjectRows = await sql.query<{ subject: string }>(
+              'SELECT subject FROM agent_sessions WHERE tenant_id = $1 AND id = $2',
+              [tenantId, opts.sessionId],
+            );
+            await lockUsage(
+              sql,
+              tenantId,
+              opts.sessionId,
+              subjectRows.rows[0]?.subject ?? 'agent:unknown',
+              plan.totals.notional.currency,
+            );
+            const reserved = await reserveBudget(
+              sql,
+              tenantId,
+              opts.sessionId,
+              outflow,
+              ceiling,
+            );
+            if (!reserved) {
+              overBudget = true;
+              await finishExecution(sql, tenantId, c.execution.id, {
+                state: 'aborted',
+                errorCode: 'session_budget_exceeded',
+                errorDetail: 'reservation refused at commit time',
+              });
+              await setPlanState(sql, tenantId, planId, 'denied');
+              return c;
+            }
+          }
+        }
+
+        await setPlanState(sql, tenantId, planId, 'executing');
         return c;
       });
     } catch (err) {
@@ -180,10 +226,29 @@ export class ExecutionService {
       };
     }
 
+    if (overBudget) {
+      return {
+        status: 'rejected',
+        reason: 'session budget would be exceeded at commit time',
+      };
+    }
+
     const executionId = claim.execution.id;
 
     // ---- 3. call the processor -------------------------------------------------------
-    const outcome = await this.callProcessor(plan, idempotencyKey);
+    // An adapter that throws rather than returning an outcome must not strand the
+    // execution in `pending`. An unhandled throw here is indistinguishable, from the
+    // outside, from a request that may or may not have been applied -- so it is treated
+    // as exactly that.
+    let outcome: ProcessorOutcome;
+    try {
+      outcome = await this.callProcessor(plan, idempotencyKey);
+    } catch (err) {
+      outcome = {
+        status: 'indeterminate',
+        message: `processor adapter threw: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
 
     // ---- 4. record what happened -----------------------------------------------------
     return this.settle(opts, plan, executionId, accountId, outcome, now);
@@ -304,7 +369,7 @@ export class ExecutionService {
           processorReference: outcome.reference,
         });
         await setPlanState(sql, tenantId, planId, 'executed');
-        await chargeUsage(sql, tenantId, sessionId, plan.totals.merchantOutflow.minor);
+        // Budget was already reserved at claim time; nothing to charge here.
         await enqueue(sql, tenantId, 'execution.succeeded', { executionId, planId });
         await appendAudit(sql, {
           tenantId,
@@ -337,6 +402,9 @@ export class ExecutionService {
           errorCode: outcome.code,
           errorDetail: outcome.message,
         });
+        // The money did not move, so the reservation is given back. Not releasing it
+        // would let a run of processor failures silently consume an agent's whole budget.
+        await releaseBudget(sql, tenantId, sessionId, plan.totals.merchantOutflow.minor);
         await setPlanState(sql, tenantId, planId, 'failed');
         await appendAudit(sql, {
           tenantId,
@@ -425,6 +493,9 @@ export class ExecutionService {
         errorCode: 'indeterminate',
         errorDetail: message,
       });
+      // The reservation is deliberately NOT released. The money may well have moved, and
+      // releasing budget for a spend that might be real would let an agent exceed its
+      // limit precisely when the system is least sure what it has already done.
       await setPlanState(sql, tenantId, planId, 'failed');
       await sql.query(
         `INSERT INTO reconciliation_findings (id, tenant_id, entity_ref, kind, internal_minor, currency, detail)

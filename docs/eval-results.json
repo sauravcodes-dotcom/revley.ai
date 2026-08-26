@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-08-26T14:35:35.636Z",
-  "total": 55,
-  "passed": 55,
+  "generatedAt": "2026-08-26T14:39:48.804Z",
+  "total": 59,
+  "passed": 59,
   "suites": [
     {
       "suite": "injection",
@@ -217,14 +217,14 @@
     },
     {
       "suite": "idempotency",
-      "passed": 6,
-      "total": 6,
+      "passed": 10,
+      "total": 10,
       "checks": [
         {
           "suite": "idempotency",
           "name": "five concurrent commits produce exactly one execution",
           "passed": true,
-          "detail": "1 reported executed; others: already_executed, already_executed, already_executed, already_executed"
+          "detail": "1 reported executed; others: already_executed, already_executed, needs_attention, needs_attention"
         },
         {
           "suite": "idempotency",
@@ -255,6 +255,30 @@
           "name": "a later re-commit of an executed plan is refused",
           "passed": true,
           "detail": "status=rejected"
+        },
+        {
+          "suite": "idempotency",
+          "name": "setup: two plans on distinct orders both authorize against an empty budget",
+          "passed": true,
+          "detail": "planA=true planB=true"
+        },
+        {
+          "suite": "idempotency",
+          "name": "the first commit succeeds",
+          "passed": true,
+          "detail": "status=executed"
+        },
+        {
+          "suite": "idempotency",
+          "name": "the second commit is refused by the budget reservation, not by divergence",
+          "passed": true,
+          "detail": "status=rejected reason=session budget would be exceeded at commit time"
+        },
+        {
+          "suite": "idempotency",
+          "name": "spend stays within the session ceiling",
+          "passed": true,
+          "detail": "30.00 USD spent against a 100.00 USD ceiling"
         }
       ]
     },
@@ -334,7 +358,7 @@
           "suite": "fault_recovery",
           "name": "no execution is left dangling in pending",
           "passed": true,
-          "detail": "states: {\"succeeded\":43,\"failed\":17}"
+          "detail": "states: {\"succeeded\":49,\"failed\":11}"
         },
         {
           "suite": "fault_recovery",
@@ -352,7 +376,7 @@
           "suite": "fault_recovery",
           "name": "refund count equals succeeded execution count",
           "passed": true,
-          "detail": "refunds=43 succeeded=43"
+          "detail": "refunds=49 succeeded=49"
         },
         {
           "suite": "fault_recovery",
@@ -364,7 +388,7 @@
           "suite": "fault_recovery",
           "name": "unknown outcomes were resolved by probing, not by retrying",
           "passed": true,
-          "detail": "4 timeouts (2 of which had already applied), 4 lookups"
+          "detail": "10 timeouts (4 of which had already applied), 10 lookups"
         }
       ]
     }

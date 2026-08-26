@@ -118,7 +118,7 @@ cp .env.example .env     # then paste the keys in
 npm test                 # 82 unit + property tests, no database needed
 npm run db:test:rls      # 9 tenant-isolation checks, as the application role
 npm run demo             # the scripted end-to-end walkthrough
-npm run evals            # 55 assertions across five suites
+npm run evals            # 59 assertions across five suites
 ```
 
 `npm run demo` is the fastest way to see the point. It runs against a real database and
@@ -179,14 +179,14 @@ chargeback.
 
 ## Evaluation results
 
-`npm run evals` — 55 assertions, deterministic, against real Postgres. Full output in
+`npm run evals` — 59 assertions against real Postgres. Full output in
 [`docs/eval-results.json`](docs/eval-results.json).
 
 | Suite | Result |
 |---|---|
 | Prompt injection (12 attacks) | 26/26 — **0.00 USD moved**, every attack stopped by its expected control |
 | Authorization | 7/7 |
-| Idempotency | 6/6 — five concurrent commits produce exactly one execution |
+| Idempotency and budgets | 10/10 — five concurrent commits produce exactly one execution |
 | Time-of-check/time-of-use | 9/9 — 4/4 stale commits prevented, control case still commits |
 | Fault recovery under chaos | 7/7 — 60 refunds, every unknown outcome resolved by probe |
 
@@ -215,8 +215,9 @@ exists without a succeeded execution behind it, nothing is left `pending`, every
 unresolvable outcome raised a reconciliation finding — which must hold for *every* sample.
 An assertion that only held for one lucky run would not be worth making.
 
-Three of these suites failed on first run and found real bugs. They are documented in the
-commit history rather than quietly fixed; see `a81ca12`.
+Several of these suites failed on first run and found real bugs, documented in the commit
+history rather than quietly fixed. Twice the *test* was the thing that was wrong, and
+twice it was passing while measuring nothing — see "Things that went wrong".
 
 ---
 
@@ -270,10 +271,25 @@ violation and then queried the same transaction — which PostgreSQL had already
 duplicate submission raised `current transaction is aborted` instead of returning the
 winner's execution. Found by the idempotency eval on its first run.
 
-**An eval suite that passed while testing nothing.** The chaos suite reported 5/5 while
+**Budgets were checked but never reserved.** `authorize()` verified spend against the
+counter at proposal time, and the counter was only incremented *after* a successful
+execution. Several approved plans could each pass against the same untouched value and
+then all commit. A comment in the repository claimed the row lock closed that window; it
+did not. Reservation now happens at claim time, in the same transaction, before the
+processor is called, and is released if the money does not move.
+
+**Two eval suites that passed while testing nothing.** The chaos suite reported 5/5 while
 executing 1 of 24 refunds: identical amounts compiled to identical effect hashes, so the
 duplicate-effect check diverted the rest to human review. It was measuring the duplicate
-check, not fault recovery.
+check, not fault recovery. Then the first budget-reservation test passed because the
+other plans aborted on *divergence* — the first commit changed the order — so the budget
+was never consulted. It looked like a budget test and was a TOCTOU test. Both are now
+constructed so the control under test is the only thing that can stop the case.
+
+**An adapter that throws stranded the execution.** `callProcessor` was unwrapped, so a
+throw left the execution row `pending` forever. The eval asserting no dangling executions
+passed only because the simulator never throws. A throw is now treated as `indeterminate`,
+which is what it actually is.
 
 ---
 

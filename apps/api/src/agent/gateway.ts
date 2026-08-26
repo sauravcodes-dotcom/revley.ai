@@ -85,7 +85,7 @@ export class ToolGateway {
         issues: validated.issues,
       });
       await this.db.withTenant(ctx.tenantId, (sql) =>
-        recordDenial(sql, ctx.tenantId, ctx.sessionId),
+        recordDenial(sql, ctx.tenantId, ctx.sessionId, ctx.subject, 'USD'),
       );
       return { status: 'invalid', issues: validated.issues };
     }
@@ -128,7 +128,7 @@ export class ToolGateway {
         message: compiled.message,
       });
       await this.db.withTenant(ctx.tenantId, (sql) =>
-        recordDenial(sql, ctx.tenantId, ctx.sessionId),
+        recordDenial(sql, ctx.tenantId, ctx.sessionId, ctx.subject, capability.limits.currency),
       );
       return { status: 'uncompilable', code: compiled.code, message: compiled.message };
     }
@@ -184,7 +184,15 @@ export class ToolGateway {
       await insertIntent(sql, intent, toolCall.input);
       await insertPlan(sql, plan, authz, state);
 
-      if (authz.outcome === 'deny') await recordDenial(sql, ctx.tenantId, ctx.sessionId);
+      if (authz.outcome === 'deny') {
+        await recordDenial(
+          sql,
+          ctx.tenantId,
+          ctx.sessionId,
+          ctx.subject,
+          capability.limits.currency,
+        );
+      }
 
       await appendAudit(sql, {
         tenantId: ctx.tenantId,

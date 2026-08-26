@@ -454,7 +454,42 @@ export async function lockUsage(
   };
 }
 
-export async function chargeUsage(
+/**
+ * Reserve budget for an execution that is about to be attempted.
+ *
+ * This runs in the same transaction as the execution claim, under the row lock taken by
+ * `lockUsage`, and it happens BEFORE the processor is called.
+ *
+ * The first implementation charged usage after a successful execution instead. That left
+ * a window in which several proposals could each pass the budget check against the same
+ * unchanged counter and then all commit, collectively exceeding the limit. A budget that
+ * is checked but not reserved is not a budget.
+ *
+ * Returns false when the reservation would breach the ceiling, in which case the caller
+ * must not proceed. The `WHERE` clause does the comparison, so the decision and the write
+ * are one atomic statement with no gap between them.
+ */
+export async function reserveBudget(
+  sql: Sql,
+  tenantId: string,
+  sessionId: string,
+  amountMinor: number,
+  sessionCeilingMinor: number,
+): Promise<boolean> {
+  const { rows } = await sql.query<{ session_spent_minor: string }>(
+    `UPDATE capability_usage
+        SET session_spent_minor = session_spent_minor + $3,
+            consecutive_denials = 0
+      WHERE tenant_id = $1 AND session_id = $2 AND usage_date = CURRENT_DATE
+        AND session_spent_minor + $3 <= $4
+      RETURNING session_spent_minor`,
+    [tenantId, sessionId, amountMinor, sessionCeilingMinor],
+  );
+  return rows.length > 0;
+}
+
+/** Give back a reservation for an execution that did not move money. */
+export async function releaseBudget(
   sql: Sql,
   tenantId: string,
   sessionId: string,
@@ -462,24 +497,48 @@ export async function chargeUsage(
 ): Promise<void> {
   await sql.query(
     `UPDATE capability_usage
-        SET session_spent_minor = session_spent_minor + $3,
-            consecutive_denials = 0
+        SET session_spent_minor = GREATEST(0, session_spent_minor - $3)
       WHERE tenant_id = $1 AND session_id = $2 AND usage_date = CURRENT_DATE`,
     [tenantId, sessionId, amountMinor],
   );
+}
+
+/** The session ceiling recorded on the capability issued for this session. */
+export async function sessionCeiling(
+  sql: Sql,
+  tenantId: string,
+  sessionId: string,
+): Promise<number | null> {
+  const { rows } = await sql.query<{ document: { limits?: { sessionBudgetMinor?: number } } }>(
+    `SELECT document FROM capabilities
+      WHERE tenant_id = $1 AND session_id = $2 AND revoked_at IS NULL
+      ORDER BY issued_at DESC LIMIT 1`,
+    [tenantId, sessionId],
+  );
+  const v = rows[0]?.document?.limits?.sessionBudgetMinor;
+  return typeof v === 'number' ? v : null;
 }
 
 export async function recordDenial(
   sql: Sql,
   tenantId: string,
   sessionId: string,
+  subject: string,
+  currency: string,
 ): Promise<number> {
+  // Upsert, not update.
+  //
+  // A plain UPDATE silently affected zero rows whenever the usage row did not exist yet,
+  // which is exactly the case for a proposal rejected at schema validation -- before
+  // lockUsage has run. Malformed tool calls therefore never counted toward the denial
+  // circuit, and an agent emitting garbage could loop indefinitely.
   const { rows } = await sql.query<{ consecutive_denials: number }>(
-    `UPDATE capability_usage
-        SET consecutive_denials = consecutive_denials + 1
-      WHERE tenant_id = $1 AND session_id = $2 AND usage_date = CURRENT_DATE
-      RETURNING consecutive_denials`,
-    [tenantId, sessionId],
+    `INSERT INTO capability_usage (tenant_id, session_id, subject, usage_date, currency, consecutive_denials)
+     VALUES ($1,$2,$3,CURRENT_DATE,$4,1)
+     ON CONFLICT (session_id, usage_date)
+       DO UPDATE SET consecutive_denials = capability_usage.consecutive_denials + 1
+     RETURNING consecutive_denials`,
+    [tenantId, sessionId, subject, currency],
   );
   return rows[0]?.consecutive_denials ?? 0;
 }
